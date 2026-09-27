@@ -35,6 +35,17 @@ stages:
           - powershell: |
               Set-Location "$(workingDir)"
               
+              # Clear lingering state blob lease if any from previous crashed run
+              try {
+                  if (Get-Command az -ErrorAction SilentlyContinue) {
+                      Write-Host "##[section]Clearing any stale state locks from previous runs..."
+                      az login --service-principal -u $env:ARM_CLIENT_ID -p $env:ARM_CLIENT_SECRET --tenant $env:ARM_TENANT_ID --output none 2>$null
+                      az storage blob lease break --blob-name "ranjan.tfstate" --container-name "ranjancontainer" --account-name "ranjanst2026" --output none 2>$null
+                  }
+              } catch {
+                  Write-Host "##[info]Skipping lease break check."
+              }
+
               $maxRetries = 3
               $retryCount = 0
               $initSuccess = $false
@@ -138,7 +149,7 @@ stages:
               if (-not $initSuccess) { exit 1 }
               
               Write-Host "##[section]Generating Terraform Execution Plan..."
-              terraform plan -out=tfplan
+              terraform plan -lock-timeout=60s -out=tfplan
               if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
               
               Write-Host "##[section]Exporting plan to JSON for cost estimation..."
@@ -229,6 +240,17 @@ stages:
               
               Set-Location "$(workingDir)"
               
+              # Clear lingering state blob lease if any before apply
+              try {
+                  if (Get-Command az -ErrorAction SilentlyContinue) {
+                      Write-Host "##[section]Clearing any stale state locks..."
+                      az login --service-principal -u $env:ARM_CLIENT_ID -p $env:ARM_CLIENT_SECRET --tenant $env:ARM_TENANT_ID --output none 2>$null
+                      az storage blob lease break --blob-name "ranjan.tfstate" --container-name "ranjancontainer" --account-name "ranjanst2026" --output none 2>$null
+                  }
+              } catch {
+                  Write-Host "##[info]Skipping lease break check."
+              }
+
               $maxRetries = 3
               $retryCount = 0
               $initSuccess = $false
@@ -246,7 +268,7 @@ stages:
               if (-not $initSuccess) { exit 1 }
               
               Write-Host "##[section]Applying Terraform Plan..."
-              terraform apply -auto-approve tfplan
+              terraform apply -lock-timeout=60s -auto-approve tfplan
               if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             displayName: 'Terraform Apply Execution'
             env:
