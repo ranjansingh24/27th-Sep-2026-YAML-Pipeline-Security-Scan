@@ -15,7 +15,7 @@ pr:
 # Azure DevOps Agent Pool Configuration:
 # Pool name is typically 'Default' for self-hosted agents, with demand for agent 'Ranjan_Infra_Agent'
 pool:
-  name: 'Default'
+  name: 'Ranjan_Infra_Pool'
   demands:
     - agent.name -equals Ranjan_Infra_Agent
 
