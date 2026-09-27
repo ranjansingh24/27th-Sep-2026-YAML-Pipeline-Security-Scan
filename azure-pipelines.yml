@@ -12,8 +12,12 @@ pr:
     include:
       - main
 
+# Azure DevOps Agent Pool Configuration:
+# Pool name is typically 'Default' for self-hosted agents, with demand for agent 'Ranjan_Infra_Agent'
 pool:
-  name: 'Ranjan_Infra_Agent'
+  name: 'Default'
+  demands:
+    - agent.name -equals Ranjan_Infra_Agent
 
 variables:
   ARM_CLIENT_ID: 'e142cdc4-bc89-458b-ba2b-67e1b5764ad3'
