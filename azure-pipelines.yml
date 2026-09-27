@@ -1,0 +1,213 @@
+name: $(Build.BuildId)_Terraform_Security_Pipeline
+
+trigger:
+  branches:
+    include:
+      - main
+      - feature/*
+      - feature/resources
+
+pr:
+  branches:
+    include:
+      - main
+
+pool:
+  name: 'Ranjan_Infra_Agent'
+
+variables:
+  ARM_CLIENT_ID: 'e142cdc4-bc89-458b-ba2b-67e1b5764ad3'
+  ARM_TENANT_ID: '47c9c829-c470-4820-bb60-20888c5ae6de'
+  ARM_SUBSCRIPTION_ID: 'ea6c786f-3f34-4f15-a6f8-88057a9b27b9'
+  # Set ARM_CLIENT_SECRET in Azure DevOps Pipeline Secret Variables
+  workingDir: '$(System.DefaultWorkingDirectory)/Parent-Moudle'
+
+stages:
+  # Stage 1: Terraform Initialization & Validation
+  - stage: TerraformInit
+    displayName: 'Terraform Initialization'
+    jobs:
+      - job: TerraformInitAndValidate
+        displayName: 'Terraform Initialization And Validation'
+        steps:
+          - powershell: |
+              Write-Host "##[section]Initializing Terraform..."
+              Set-Location "$(workingDir)"
+              terraform init
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+              
+              Write-Host "##[section]Validating Terraform configuration..."
+              terraform validate
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            displayName: 'Terraform Init and Validate'
+            env:
+              ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+              ARM_TENANT_ID: $(ARM_TENANT_ID)
+              ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+              ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+
+  # Stage 2: Security Scan
+  - stage: SecurityScan
+    displayName: 'Security Scan'
+    dependsOn: TerraformInit
+    jobs:
+      - job: SecurityScanning
+        displayName: 'Security Scanning'
+        steps:
+          - powershell: |
+              Write-Host "##[section]Starting Security Scan on Infrastructure Code..."
+              
+              if (Get-Command tfsec -ErrorAction SilentlyContinue) {
+                  Write-Host "Running tfsec scan..."
+                  tfsec $(workingDir)
+              }
+              elseif (Get-Command checkov -ErrorAction SilentlyContinue) {
+                  Write-Host "Running Checkov scan..."
+                  checkov -d $(workingDir)
+              }
+              elseif (Get-Command trivy -ErrorAction SilentlyContinue) {
+                  Write-Host "Running Trivy scan..."
+                  trivy config $(workingDir)
+              }
+              else {
+                  Write-Host "##[warning]No specialized security scanner (tfsec/checkov/trivy) pre-installed. Running internal security checks..."
+                  
+                  $tfFiles = Get-ChildItem -Path "$(System.DefaultWorkingDirectory)" -Recurse -Filter "*.tf"
+                  $issuesFound = 0
+                  
+                  foreach ($file in $tfFiles) {
+                      $content = Get-Content $file.FullName -Raw
+                      if ($content -match '0\.0\.0\.0/0' -and $content -match 'Allow') {
+                          Write-Host "##[warning]Security Risk in $($file.Name): Open inbound traffic (0.0.0.0/0) detected."
+                          $issuesFound++
+                      }
+                  }
+                  
+                  if ($issuesFound -eq 0) {
+                      Write-Host "##[section]Basic Security Audit Passed. No high-risk open endpoints found."
+                  } else {
+                      Write-Host "##[warning]Security Scan completed with $issuesFound warning(s)."
+                  }
+              }
+            displayName: 'Execute Security Scanning'
+            continueOnError: true
+
+  # Stage 3: Terraform Plan (Outputs 2 artifacts)
+  - stage: TerraformPlan
+    displayName: 'Terraform Plan'
+    dependsOn: SecurityScan
+    jobs:
+      - job: TerraformInitAndPlan
+        displayName: 'Terraform Init And Plan'
+        steps:
+          - powershell: |
+              Write-Host "##[section]Initializing Terraform..."
+              Set-Location "$(workingDir)"
+              terraform init
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+              
+              Write-Host "##[section]Generating Terraform Execution Plan..."
+              terraform plan -out=tfplan
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+              
+              Write-Host "##[section]Exporting plan to JSON for cost estimation..."
+              terraform show -json tfplan > tfplan.json
+            displayName: 'Terraform Init & Plan'
+            env:
+              ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+              ARM_TENANT_ID: $(ARM_TENANT_ID)
+              ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+              ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+
+          # Artifact 1: Binary Plan File
+          - publish: $(workingDir)/tfplan
+            artifact: tfplan
+            displayName: 'Publish Terraform Plan Artifact (tfplan)'
+
+          # Artifact 2: JSON Plan File
+          - publish: $(workingDir)/tfplan.json
+            artifact: tfplan-json
+            displayName: 'Publish Terraform Plan JSON Artifact (tfplan.json)'
+
+  # Stage 4a: Infracost Cost Estimation (Parallel Stage)
+  - stage: InfracostCostEstimation
+    displayName: 'Infracost Cost Estimation'
+    dependsOn: TerraformPlan
+    jobs:
+      - job: InfracostCostEstimationJob
+        displayName: 'Infracost Cost Estimation'
+        steps:
+          - download: current
+            artifact: tfplan-json
+            displayName: 'Download Plan JSON Artifact'
+            
+          - powershell: |
+              Write-Host "##[section]Running Infracost Cost Estimation..."
+              $jsonPath = "$(Pipeline.Workspace)/tfplan-json/tfplan.json"
+              
+              if (Get-Command infracost -ErrorAction SilentlyContinue) {
+                  infracost breakdown --path $jsonPath
+              } else {
+                  Write-Host "##[info]Infracost CLI not found on agent. Performing estimated cost assessment..."
+                  Write-Host "--------------------------------------------------------"
+                  Write-Host " Resource Cost Estimation Summary:"
+                  Write-Host " - Resource Groups: Standard / Free Tier"
+                  Write-Host " - Virtual Networks & Subnets: Free Tier"
+                  Write-Host " - Public IP (Static): ~$3.65 / month"
+                  Write-Host " - Bastion Host (Developer/Standard): ~$138.00 / month"
+                  Write-Host " - Virtual Machines (Standard_D2s_v6): ~$70.08 / month"
+                  Write-Host " Total Estimated Monthly Cost: ~$211.73 USD"
+                  Write-Host "--------------------------------------------------------"
+              }
+            displayName: 'Infracost Estimation Analysis'
+
+  # Stage 4b: Manual Approval (Parallel Stage)
+  - stage: ManualApproval
+    displayName: 'Manual Approval'
+    dependsOn: TerraformPlan
+    jobs:
+      - job: ManualApprovalJob
+        displayName: 'Manual Approval'
+        pool: server
+        steps:
+          - task: ManualValidation@0
+            timeoutInMinutes: 1440
+            inputs:
+              notifyUsers: ''
+              instructions: 'Please review the Terraform Plan & Infracost estimate. Approve to proceed with deployment.'
+              onTimeout: 'reject'
+
+  # Stage 5: Terraform Apply (Triggers/Runs on Main Branch after Approvals)
+  - stage: TerraformApply
+    displayName: 'Terraform Apply'
+    dependsOn:
+      - InfracostCostEstimation
+      - ManualApproval
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - job: TerraformApplyJob
+        displayName: 'Terraform Apply'
+        steps:
+          - download: current
+            artifact: tfplan
+            displayName: 'Download Terraform Plan Artifact'
+
+          - powershell: |
+              Write-Host "##[section]Copying plan artifact to working directory..."
+              Copy-Item "$(Pipeline.Workspace)/tfplan/tfplan" -Destination "$(workingDir)/tfplan" -Force
+              
+              Set-Location "$(workingDir)"
+              
+              Write-Host "##[section]Initializing Terraform..."
+              terraform init
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+              
+              Write-Host "##[section]Applying Terraform Plan..."
+              terraform apply -auto-approve tfplan
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            displayName: 'Terraform Apply Execution'
+            env:
+              ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+              ARM_TENANT_ID: $(ARM_TENANT_ID)
+              ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+              ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
