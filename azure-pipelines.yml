@@ -33,10 +33,23 @@ stages:
         displayName: 'Terraform Initialization And Validation'
         steps:
           - powershell: |
-              Write-Host "##[section]Initializing Terraform..."
               Set-Location "$(workingDir)"
-              terraform init
-              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+              
+              $maxRetries = 3
+              $retryCount = 0
+              $initSuccess = $false
+              while (-not $initSuccess -and $retryCount -lt $maxRetries) {
+                  $retryCount++
+                  Write-Host "##[section]Initializing Terraform (Attempt $retryCount of $maxRetries)..."
+                  terraform init
+                  if ($LASTEXITCODE -eq 0) {
+                      $initSuccess = $true
+                  } else {
+                      Write-Host "##[warning]Terraform init encountered network glitch. Retrying in 5 seconds..."
+                      Start-Sleep -Seconds 5
+                  }
+              }
+              if (-not $initSuccess) { exit 1 }
               
               Write-Host "##[section]Validating Terraform configuration..."
               terraform validate
@@ -106,10 +119,23 @@ stages:
         displayName: 'Terraform Init And Plan'
         steps:
           - powershell: |
-              Write-Host "##[section]Initializing Terraform..."
               Set-Location "$(workingDir)"
-              terraform init
-              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+              
+              $maxRetries = 3
+              $retryCount = 0
+              $initSuccess = $false
+              while (-not $initSuccess -and $retryCount -lt $maxRetries) {
+                  $retryCount++
+                  Write-Host "##[section]Initializing Terraform (Attempt $retryCount of $maxRetries)..."
+                  terraform init
+                  if ($LASTEXITCODE -eq 0) {
+                      $initSuccess = $true
+                  } else {
+                      Write-Host "##[warning]Terraform init encountered network glitch. Retrying in 5 seconds..."
+                      Start-Sleep -Seconds 5
+                  }
+              }
+              if (-not $initSuccess) { exit 1 }
               
               Write-Host "##[section]Generating Terraform Execution Plan..."
               terraform plan -out=tfplan
@@ -203,9 +229,21 @@ stages:
               
               Set-Location "$(workingDir)"
               
-              Write-Host "##[section]Initializing Terraform..."
-              terraform init
-              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+              $maxRetries = 3
+              $retryCount = 0
+              $initSuccess = $false
+              while (-not $initSuccess -and $retryCount -lt $maxRetries) {
+                  $retryCount++
+                  Write-Host "##[section]Initializing Terraform (Attempt $retryCount of $maxRetries)..."
+                  terraform init
+                  if ($LASTEXITCODE -eq 0) {
+                      $initSuccess = $true
+                  } else {
+                      Write-Host "##[warning]Terraform init encountered network glitch. Retrying in 5 seconds..."
+                      Start-Sleep -Seconds 5
+                  }
+              }
+              if (-not $initSuccess) { exit 1 }
               
               Write-Host "##[section]Applying Terraform Plan..."
               terraform apply -auto-approve tfplan
